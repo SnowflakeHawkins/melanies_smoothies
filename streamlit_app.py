@@ -1,6 +1,8 @@
 import streamlit as st
+import pandas as pd
 from snowflake.snowpark.functions import col
 import requests
+from urllib.parse import quote
 
 st.title(":cup_with_straw: Customize Your Smoothie! :cup_with_straw:")
 st.write("Choose the fruits you want in your custom Smoothie!")
@@ -13,29 +15,54 @@ st.write("The name on your Smoothie will be:", name_on_order)
 cnx = st.connection("snowflake")
 session = cnx.session()
 
-# Get the available fruit options.
-fruit_df = (
+# Get the fruit labels and their API search values.
+my_dataframe = (
     session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
-    .select(col("FRUIT_NAME"))
-    .to_pandas()
+    .select(col("FRUIT_NAME"), col("SEARCH_ON"))
 )
+
+# Create a pandas dataframe for the search-value lookup.
+pd_df = my_dataframe.to_pandas()
 
 # Allow the customer to choose up to five ingredients.
 ingredients_list = st.multiselect(
     "Choose up to 5 ingredients:",
-    options=fruit_df["FRUIT_NAME"].tolist(),
+    options=pd_df["FRUIT_NAME"].tolist(),
     max_selections=5
 )
 
 if ingredients_list:
-    # Combine the selected fruits into one string.
+    # Combine the selected fruit labels into one string.
     ingredients_string = " ".join(ingredients_list)
 
     # Show nutrition information for each selected fruit.
     for fruit_chosen in ingredients_list:
         st.subheader(f"{fruit_chosen} Nutrition Information")
 
-        fruit_api_name = fruit_chosen.strip().lower()
+        # Find the API search value for the selected fruit.
+        search_on = pd_df.loc[
+            pd_df["FRUIT_NAME"] == fruit_chosen,
+            "SEARCH_ON"
+        ].iloc[0]
+
+        st.write(
+            "The search value for ",
+            fruit_chosen,
+            " is ",
+            search_on,
+            "."
+        )
+
+        # Skip the API request if SEARCH_ON is missing.
+        if pd.isna(search_on) or not str(search_on).strip():
+            st.warning(
+                f"SEARCH_ON is missing for {fruit_chosen}. "
+                "Update its value in the Snowflake FRUIT_OPTIONS table."
+            )
+            continue
+
+        # Use SEARCH_ON in the API request.
+        fruit_api_name = quote(str(search_on).strip(), safe="")
 
         try:
             smoothiefroot_response = requests.get(
@@ -45,21 +72,32 @@ if ingredients_list:
             smoothiefroot_response.raise_for_status()
             nutrition_data = smoothiefroot_response.json()
 
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as error:
             st.warning(
                 f"Could not load nutrition information for {fruit_chosen}."
             )
+            st.code(str(error))
 
         except ValueError:
             st.warning(
-                f"The nutrition service returned invalid data for {fruit_chosen}."
+                f"The nutrition service returned invalid data "
+                f"for {fruit_chosen}."
             )
 
         else:
-            st.dataframe(
-                data=nutrition_data,
-                width="stretch"
-            )
+            nutrition_df = pd.json_normalize(nutrition_data)
+
+            if nutrition_df.empty:
+                st.warning(
+                    f"No nutrition information was returned "
+                    f"for {fruit_chosen}."
+                )
+            else:
+                st.dataframe(
+                    data=nutrition_df,
+                    width="stretch",
+                    hide_index=True
+                )
 
     # Prepare the SQL statement.
     my_insert_stmt = """
@@ -75,7 +113,10 @@ if ingredients_list:
         else:
             session.sql(
                 my_insert_stmt,
-                params=[ingredients_string, name_on_order.strip()]
+                params=[
+                    ingredients_string,
+                    name_on_order.strip()
+                ]
             ).collect()
 
             st.success("Your Smoothie is ordered!", icon="✅")
