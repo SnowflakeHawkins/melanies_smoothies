@@ -9,9 +9,10 @@ st.write("Choose the fruits you want in your custom Smoothie!")
 name_on_order = st.text_input("Name on Smoothie:")
 st.write("The name on your Smoothie will be:", name_on_order)
 
-# Connect to the active Snowflake session.
+# Connect to Snowflake.
 cnx = st.connection("snowflake")
 session = cnx.session()
+
 # Get the available fruit options.
 fruit_df = (
     session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
@@ -27,11 +28,38 @@ ingredients_list = st.multiselect(
 )
 
 if ingredients_list:
+    # Combine the selected fruits into one string.
     ingredients_string = " ".join(ingredients_list)
 
+    # Show nutrition information for each selected fruit.
     for fruit_chosen in ingredients_list:
-        st.subheader(fruit_chosen + " Nutrition Information")
-        smoothiefroot_response = requests.get("https://my.smoothiefroot.com/api/fruit/watermelon")
+        st.subheader(f"{fruit_chosen} Nutrition Information")
+
+        fruit_api_name = fruit_chosen.strip().lower()
+
+        try:
+            smoothiefroot_response = requests.get(
+                f"https://my.smoothiefroot.com/api/fruit/{fruit_api_name}",
+                timeout=30
+            )
+            smoothiefroot_response.raise_for_status()
+            nutrition_data = smoothiefroot_response.json()
+
+        except requests.exceptions.RequestException:
+            st.warning(
+                f"Could not load nutrition information for {fruit_chosen}."
+            )
+
+        except ValueError:
+            st.warning(
+                f"The nutrition service returned invalid data for {fruit_chosen}."
+            )
+
+        else:
+            st.dataframe(
+                data=nutrition_data,
+                width="stretch"
+            )
 
     # Prepare the SQL statement.
     my_insert_stmt = """
@@ -41,24 +69,16 @@ if ingredients_list:
     """
 
     # Save the order when the customer clicks the button.
-    time_to_insert = st.button("Submit Order")
+    if st.button("Submit Order"):
+        if not name_on_order.strip():
+            st.warning("Please enter a name for your smoothie.")
+        else:
+            session.sql(
+                my_insert_stmt,
+                params=[ingredients_string, name_on_order.strip()]
+            ).collect()
 
-    if time_to_insert:
-        session.sql(
-            my_insert_stmt,
-            params=[ingredients_string, name_on_order]
-        ).collect()
+            st.success("Your Smoothie is ordered!", icon="✅")
 
-        st.success("Your Smoothie is ordered!", icon="✅")
-
-
-
-smoothiefroot_response = requests.get(
-    "https://my.smoothiefroot.com/api/fruit/watermelon",
-    timeout=30
-)
-
-st.text(smoothiefroot_response.json())
-
-sf_df = st.dataframe(data=smoothiefroot_response.json(), use_container_width="stretch")
-
+else:
+    st.info("Select at least one fruit to customize your smoothie.")
