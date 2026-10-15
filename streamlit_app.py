@@ -1,9 +1,6 @@
 import streamlit as st
-import pandas as pd
-import requests
-from urllib.parse import quote
 from snowflake.snowpark.functions import col
-
+import requests
 
 st.title(":cup_with_straw: Customize Your Smoothie! :cup_with_straw:")
 st.write("Choose the fruits you want in your custom Smoothie!")
@@ -16,14 +13,14 @@ st.write("The name on your Smoothie will be:", name_on_order)
 cnx = st.connection("snowflake")
 session = cnx.session()
 
-# Get the display names and API search values.
+# Get the available fruit options.
 fruit_df = (
     session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
-    .select(col("FRUIT_NAME"), col("SEARCH_ON"))
+    .select(col("FRUIT_NAME"))
     .to_pandas()
 )
 
-# Show friendly fruit names in the selection box.
+# Allow the customer to choose up to five ingredients.
 ingredients_list = st.multiselect(
     "Choose up to 5 ingredients:",
     options=fruit_df["FRUIT_NAME"].tolist(),
@@ -31,82 +28,54 @@ ingredients_list = st.multiselect(
 )
 
 if ingredients_list:
-    # Store the selected display names with the order.
+    # Combine the selected fruits into one string.
     ingredients_string = " ".join(ingredients_list)
 
-    # Load nutrition information for each selected fruit.
+    # Show nutrition information for each selected fruit.
     for fruit_chosen in ingredients_list:
         st.subheader(f"{fruit_chosen} Nutrition Information")
 
-        # Find the API search value for this fruit.
-        search_on = fruit_df.loc[
-            fruit_df["FRUIT_NAME"] == fruit_chosen,
-            "SEARCH_ON"
-        ].iloc[0]
-
-        # Skip requests when SEARCH_ON has not been filled in.
-        if pd.isna(search_on) or not str(search_on).strip():
-            st.warning(
-                f"SEARCH_ON is missing for {fruit_chosen}. "
-                "Update this fruit in your Snowflake FRUIT_OPTIONS table."
-            )
-            continue
-
-        fruit_api_name = quote(str(search_on).strip(), safe="")
-        fruit_url = (
-            f"https://my.smoothiefroot.com/api/fruit/{fruit_api_name}"
-        )
+        fruit_api_name = fruit_chosen.strip().lower()
 
         try:
-            response = requests.get(fruit_url, timeout=30)
-            response.raise_for_status()
-            nutrition_data = response.json()
+            smoothiefroot_response = requests.get(
+                f"https://my.smoothiefroot.com/api/fruit/{fruit_api_name}",
+                timeout=30
+            )
+            smoothiefroot_response.raise_for_status()
+            nutrition_data = smoothiefroot_response.json()
 
-        except requests.exceptions.RequestException as error:
+        except requests.exceptions.RequestException:
             st.warning(
                 f"Could not load nutrition information for {fruit_chosen}."
             )
-            st.code(str(error))
 
         except ValueError:
             st.warning(
-                f"The nutrition service did not return valid JSON "
-                f"for {fruit_chosen}."
+                f"The nutrition service returned invalid data for {fruit_chosen}."
             )
 
         else:
-            nutrition_df = pd.json_normalize(nutrition_data)
+            st.dataframe(
+                data=nutrition_data,
+                width="stretch"
+            )
 
-            if nutrition_df.empty:
-                st.warning(
-                    f"No nutrition information was returned "
-                    f"for {fruit_chosen}."
-                )
-            else:
-                st.dataframe(
-                    nutrition_df,
-                    width="stretch",
-                    hide_index=True
-                )
-
-    # Prepare the order statement.
+    # Prepare the SQL statement.
     my_insert_stmt = """
         INSERT INTO SMOOTHIES.PUBLIC.ORDERS
             (ingredients, name_on_order)
         VALUES (?, ?)
     """
 
-    # Save the order only when the button is clicked.
+    # Save the order when the customer clicks the button.
     if st.button("Submit Order"):
         if not name_on_order.strip():
             st.warning("Please enter a name for your smoothie.")
         else:
             session.sql(
                 my_insert_stmt,
-                params=[
-                    ingredients_string,
-                    name_on_order.strip()
-                ]
+                params=[ingredients_string, name_on_order.strip()]
             ).collect()
 
             st.success("Your Smoothie is ordered!", icon="✅")
