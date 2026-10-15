@@ -27,10 +27,11 @@ ingredients_list = st.multiselect(
 )
 
 if ingredients_list:
-    # Combine the selected fruits into one string.
-    ingredients_string += fruit_chosen + ''
-    st.subheader(fruit_chosen + 'Nutrition Information')
-    smoothiefroot_response = requests.get("https://my.smoothiefroot.com/api/fruit/watermelon")
+    ingredients_string = " ".join(ingredients_list)
+
+    for fruit_chosen in ingredients_list:
+        st.subheader(fruit_chosen + " Nutrition Information")
+        smoothiefroot_response = requests.get("https://my.smoothiefroot.com/api/fruit/watermelon")
 
     # Prepare the SQL statement.
     my_insert_stmt = """
