@@ -33,7 +33,7 @@ ingredients_list = st.multiselect(
 
 if ingredients_list:
     # Combine the selected fruit labels into one string.
-    ingredients_string = " ".join(ingredients_list)
+    ingredients_string = " ".join(ingredients_list) + " "
 
     # Show nutrition information for each selected fruit.
     for fruit_chosen in ingredients_list:
